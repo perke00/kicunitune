@@ -1,0 +1,19 @@
+{
+  "version": 6,
+  "configurePresets": [
+    { "name": "vs2022", "displayName": "Visual Studio 2022 x64", "generator": "Visual Studio 17 2022",
+      "architecture": "x64", "binaryDir": "${sourceDir}/build" },
+    { "name": "dsp-only", "displayName": "DSP tests only (any platform)", "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-dsp",
+      "cacheVariables": { "KITSUNE_BUILD_PLUGIN": "OFF", "CMAKE_BUILD_TYPE": "Release" } }
+  ],
+  "buildPresets": [
+    { "name": "release", "configurePreset": "vs2022", "configuration": "Release" },
+    { "name": "debug",   "configurePreset": "vs2022", "configuration": "Debug" },
+    { "name": "dsp-only", "configurePreset": "dsp-only" }
+  ],
+  "testPresets": [
+    { "name": "release", "configurePreset": "vs2022", "configuration": "Release", "output": { "outputOnFailure": true } },
+    { "name": "dsp-only", "configurePreset": "dsp-only", "output": { "outputOnFailure": true } }
+  ]
+}
