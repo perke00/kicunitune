@@ -1,24 +1,78 @@
-name: Build
+
+name: Build KITSUNE Auto Tune
 
 on:
-  push: { branches: [main], tags: ['v*'] }
+  push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   windows:
+    name: Windows VST3 and Installer
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Check project files
+        shell: pwsh
+        run: |
+          if (!(Test-Path "CMakeLists.txt")) {
+            throw "Missing CMakeLists.txt in repository root."
+          }
+          if (!(Test-Path "CMakePresets.json")) {
+            throw "Missing CMakePresets.json."
+          }
+          if (!(Test-Path "Installer/build-installer.ps1")) {
+            throw "Missing Installer/build-installer.ps1."
+          }
+
+      - name: Show CMake presets
+        shell: pwsh
+        run: |
+          cmake --version
+          cmake --list-presets
+          cmake --list-presets=build
 
       - name: Configure
         run: cmake --preset vs2022
 
-      - name: Build (Release)
+      - name: Build Release
         run: cmake --build --preset release --parallel
 
       - name: Test
-        run: ctest --preset release
+        run: ctest --preset release --output-on-failure
+
+      - name: Locate VST3 bundle
+        id: vst3
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "build/KitsuneAutoTune_artefacts/Release/VST3/KITSUNE Auto Tune.vst3",
+            "build/KITSUNEAutoTune_artefacts/Release/VST3/KITSUNE Auto Tune.vst3"
+          )
+
+          $plugin = $candidates |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
+
+          if (!$plugin) {
+            Write-Host "Build output directory:"
+            if (Test-Path "build") {
+              Get-ChildItem build -Recurse -Directory |
+                Where-Object { $_.Name -like "*.vst3" } |
+                Select-Object -ExpandProperty FullName
+            }
+            throw "VST3 bundle was not found. Check the actual CMake target and output path."
+          }
+
+          "path=$plugin" >> $env:GITHUB_OUTPUT
+          Write-Host "Found VST3: $plugin"
 
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
@@ -26,23 +80,53 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
-          $v = "0.1.0"
-          if ("${{ github.ref_type }}" -eq "tag") { $v = "${{ github.ref_name }}".TrimStart('v') }
-          ./Installer/build-installer.ps1 -Version $v -SkipTests
+          $version = "0.1.0"
 
-      - name: Zip VST3 bundle
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}".TrimStart('v')
+          }
+
+          ./Installer/build-installer.ps1 `
+            -Version $version `
+            -SkipTests
+
+      - name: Verify installer
         shell: pwsh
-        run: Compress-Archive -Path "build/KitsuneAutoTune_artefacts/Release/VST3/KITSUNE Auto Tune.vst3" -DestinationPath "KITSUNE-Auto-Tune-vst3.zip"
+        run: |
+          $installers = @(
+            Get-ChildItem "Installer/Output" -Filter "*.exe" -File `
+              -ErrorAction SilentlyContinue
+          )
 
-      - uses: actions/upload-artifact@v4
+          if ($installers.Count -eq 0) {
+            throw "No installer EXE was generated in Installer/Output."
+          }
+
+          $installers | ForEach-Object {
+            Write-Host "Installer: $($_.FullName)"
+          }
+
+      - name: Package VST3
+        shell: pwsh
+        env:
+          VST3_PATH: ${{ steps.vst3.outputs.path }}
+        run: |
+          Compress-Archive `
+            -Path "$env:VST3_PATH" `
+            -DestinationPath "KITSUNE-Auto-Tune-vst3.zip" `
+            -Force
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
         with:
           name: KITSUNE-Auto-Tune-windows
+          if-no-files-found: error
           path: |
             KITSUNE-Auto-Tune-vst3.zip
             Installer/Output/*.exe
 
-      - name: Release
-        if: github.ref_type == 'tag'
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -50,8 +134,22 @@ jobs:
             Installer/Output/*.exe
 
   dsp-linux:
-    runs-on: ubuntu-latest
+    name: DSP Tests (Linux)
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y ninja-build
-      - run: cmake --preset dsp-only && cmake --build --preset dsp-only && ctest --preset dsp-only
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake g++
+
+      - name: Configure DSP
+        run: cmake --preset dsp-only
+
+      - name: Build DSP
+        run: cmake --build --preset dsp-only --parallel
+
+      - name: Test DSP
+        run: ctest --preset dsp-only --output-on-failure
