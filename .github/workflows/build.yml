@@ -1,0 +1,57 @@
+name: Build
+
+on:
+  push: { branches: [main], tags: ['v*'] }
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake --preset vs2022
+
+      - name: Build (Release)
+        run: cmake --build --preset release --parallel
+
+      - name: Test
+        run: ctest --preset release
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $v = "0.1.0"
+          if ("${{ github.ref_type }}" -eq "tag") { $v = "${{ github.ref_name }}".TrimStart('v') }
+          ./Installer/build-installer.ps1 -Version $v -SkipTests
+
+      - name: Zip VST3 bundle
+        shell: pwsh
+        run: Compress-Archive -Path "build/KitsuneAutoTune_artefacts/Release/VST3/KITSUNE Auto Tune.vst3" -DestinationPath "KITSUNE-Auto-Tune-vst3.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KITSUNE-Auto-Tune-windows
+          path: |
+            KITSUNE-Auto-Tune-vst3.zip
+            Installer/Output/*.exe
+
+      - name: Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            KITSUNE-Auto-Tune-vst3.zip
+            Installer/Output/*.exe
+
+  dsp-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - run: cmake --preset dsp-only && cmake --build --preset dsp-only && ctest --preset dsp-only
